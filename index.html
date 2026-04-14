@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Task Manager</title>
+  <link rel="stylesheet" href="/css/style.css" />
+</head>
+<body>
+
+  <main class="app">
+
+    <!-- Header -->
+    <header class="header">
+      <p class="header-label">ASP.NET &amp; C# — Task Manager</p>
+      <h1>GET THINGS<br /><span>DONE.</span></h1>
+      <p class="header-sub">// Add · Complete · Delete</p>
+    </header>
+
+    <!-- Input Panel -->
+    <div class="input-panel">
+      <input
+        type="text"
+        id="taskInput"
+        placeholder="What needs to be done?"
+        autocomplete="off"
+        maxlength="200"
+      />
+      <button class="btn-add" id="btnAdd">+ Add</button>
+    </div>
+
+    <!-- Stats -->
+    <div class="stats" id="stats">
+      <span>Total: <strong id="statTotal">0</strong></span>
+      <span>Done: <strong id="statDone">0</strong></span>
+      <span>Remaining: <strong id="statLeft">0</strong></span>
+    </div>
+
+    <!-- Task ListBox -->
+    <ul class="task-list" id="taskList" role="listbox" aria-label="Tasks"></ul>
+
+    <!-- Empty state (shown via JS) -->
+    <div class="empty" id="emptyState" style="display:none">
+      <span class="empty-icon">✓</span>
+      No tasks yet. Add one above!
+    </div>
+
+  </main>
+
+  <!-- Toast notification -->
+  <div id="toast"></div>
+
+  <script>
+    // ── State ─────────────────────────────────────────────────────────────────
+    let tasks = [];
+
+    // ── DOM refs ──────────────────────────────────────────────────────────────
+    const input      = document.getElementById('taskInput');
+    const btnAdd     = document.getElementById('btnAdd');
+    const taskList   = document.getElementById('taskList');
+    const emptyState = document.getElementById('emptyState');
+    const statTotal  = document.getElementById('statTotal');
+    const statDone   = document.getElementById('statDone');
+    const statLeft   = document.getElementById('statLeft');
+    const toast      = document.getElementById('toast');
+
+    // ── API helpers ───────────────────────────────────────────────────────────
+    async function apiFetch(url, options = {}) {
+      const res = await fetch(url, {
+        headers: { 'Content-Type': 'application/json' },
+        ...options
+      });
+      if (!res.ok) {
+        const msg = await res.text();
+        throw new Error(msg || `HTTP ${res.status}`);
+      }
+      if (res.status === 204) return null;
+      return res.json();
+    }
+
+    // ── Load tasks ────────────────────────────────────────────────────────────
+    async function loadTasks() {
+      tasks = await apiFetch('/api/tasks');
+      renderAll();
+    }
+
+    // ── Add task ──────────────────────────────────────────────────────────────
+    async function addTask() {
+      const title = input.value.trim();
+      if (!title) { showToast('Please enter a task!'); input.focus(); return; }
+
+      btnAdd.disabled = true;
+      try {
+        const task = await apiFetch('/api/tasks', {
+          method: 'POST',
+          body: JSON.stringify({ title })
+        });
+        tasks.push(task);
+        input.value = '';
+        renderAll();
+        showToast('Task added ✓');
+      } catch (e) {
+        showToast('Error: ' + e.message);
+      } finally {
+        btnAdd.disabled = false;
+        input.focus();
+      }
+    }
+
+    // ── Toggle complete ───────────────────────────────────────────────────────
+    async function toggleTask(id) {
+      try {
+        const updated = await apiFetch(`/api/tasks/${id}/toggle`, { method: 'PATCH' });
+        const idx = tasks.findIndex(t => t.id === id);
+        if (idx !== -1) tasks[idx] = updated;
+        renderAll();
+      } catch (e) {
+        showToast('Error: ' + e.message);
+      }
+    }
+
+    // ── Delete task ───────────────────────────────────────────────────────────
+    async function deleteTask(id) {
+      try {
+        await apiFetch(`/api/tasks/${id}`, { method: 'DELETE' });
+        tasks = tasks.filter(t => t.id !== id);
+        renderAll();
+        showToast('Task deleted');
+      } catch (e) {
+        showToast('Error: ' + e.message);
+      }
+    }
+
+    // ── Render ────────────────────────────────────────────────────────────────
+    function renderAll() {
+      taskList.innerHTML = '';
+
+      const done = tasks.filter(t => t.isCompleted).length;
+      statTotal.textContent = tasks.length;
+      statDone.textContent  = done;
+      statLeft.textContent  = tasks.length - done;
+
+      emptyState.style.display = tasks.length === 0 ? 'block' : 'none';
+
+      tasks.forEach(task => {
+        const li = document.createElement('li');
+        li.className = 'task-item' + (task.isCompleted ? ' completed' : '');
+        li.setAttribute('role', 'option');
+        li.setAttribute('aria-selected', task.isCompleted);
+
+        // Checkbox (marks completed — per spec)
+        const cb = document.createElement('input');
+        cb.type = 'checkbox';
+        cb.className = 'task-check';
+        cb.checked = task.isCompleted;
+        cb.title = 'Mark as completed';
+        cb.addEventListener('change', () => toggleTask(task.id));
+
+        // Title — double-click also toggles
+        const span = document.createElement('span');
+        span.className = 'task-title';
+        span.textContent = task.title;
+        span.title = 'Double-click to toggle';
+        span.addEventListener('dblclick', () => toggleTask(task.id));
+
+        // Timestamp
+        const meta = document.createElement('span');
+        meta.className = 'task-meta';
+        meta.textContent = formatTime(task.createdAt);
+
+        // Delete button
+        const del = document.createElement('button');
+        del.className = 'btn-delete';
+        del.textContent = '✕';
+        del.title = 'Delete task';
+        del.addEventListener('click', () => deleteTask(task.id));
+
+        li.append(cb, span, meta, del);
+        taskList.appendChild(li);
+      });
+    }
+
+    // ── Helpers ───────────────────────────────────────────────────────────────
+    function formatTime(iso) {
+      const d = new Date(iso);
+      return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    }
+
+    let toastTimer;
+    function showToast(msg) {
+      toast.textContent = msg;
+      toast.classList.add('show');
+      clearTimeout(toastTimer);
+      toastTimer = setTimeout(() => toast.classList.remove('show'), 2200);
+    }
+
+    // ── Events ────────────────────────────────────────────────────────────────
+    btnAdd.addEventListener('click', addTask);
+    input.addEventListener('keydown', e => { if (e.key === 'Enter') addTask(); });
+
+    // ── Init ──────────────────────────────────────────────────────────────────
+    loadTasks();
+  </script>
+
+</body>
+</html>
